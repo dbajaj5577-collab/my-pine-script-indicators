@@ -1,0 +1,79 @@
+// My very first Pine Script project! 🚀
+//@version=3
+strategy("XAU Hyper-Growth Engine - Elite Ed.", overlay=true...
+//@version=3
+strategy("XAU Hyper-Growth Engine - Elite Ed.", overlay=true, initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=25)
+
+// --- INPUTS ---
+trendLength   = input(45, minval=1, title="Trend Filter Length (HMA)")
+atrLength     = input(14, minval=1, title="ATR Length")
+atrMultiplier = input(3.0, minval=0.1, title="Stop Loss ATR Multiplier")
+riskReward    = input(2.3, minval=0.1, title="Risk to Reward Ratio (R:R)")
+
+// Session Filter
+useTimeFilter = input(true, title="Trade Only During Liquid Sessions?")
+tradeSession  = input("0700-1700:23456", title="Allowed Session Time (London/NY UTC)")
+
+// Channel Breakout Lookback
+breakoutLength = input(9, minval=1, title="Breakout Lookback Channel")
+
+// --- INDICATORS & FILTERS ---
+// Manual HMA calculation for Pine Script v3 Compatibility
+hma_half_length = round(trendLength / 2)
+hma_sqrt_length = round(sqrt(trendLength))
+wma1 = wma(close, hma_half_length)
+wma2 = wma(close, trendLength)
+trendLine = wma(2 * wma1 - wma2, hma_sqrt_length)
+
+atr = atr(atrLength)
+
+// Volatility Expansion Filter: Only trade if ATR is greater than its 20-period average
+// This filters out low-volume, choppy break outs.
+atrMaFilter = atr > sma(atr, 20)
+
+// Session Time Check 
+inSession = not useTimeFilter or not na(time(period, tradeSession))
+
+// Fast Channel Bands
+highestHigh = highest(high, breakoutLength)
+lowestLow   = lowest(low, breakoutLength)
+
+// Plotting Trend Filter
+trendColor = close > trendLine ? #00ff00 : #ff0000
+plot(trendLine, color=trendColor, linewidth=2, title="Dynamic Trend Filter")
+
+// --- LOGIC ---
+trendBullish = close > trendLine
+trendBearish = close < trendLine
+
+// Signals trigger on breakout ONLY if volatility is expanding
+buySignal  = (close >= highestHigh[1]) and trendBullish and inSession and atrMaFilter
+sellSignal = (close <= lowestLow[1]) and trendBearish and inSession and atrMaFilter
+
+// --- EXECUTION & RISK MANAGEMENT ---
+strategy.entry("Buy", strategy.long, when = (strategy.position_size == 0 and buySignal))
+strategy.entry("Sell", strategy.short, when = (strategy.position_size == 0 and sellSignal))
+
+// Calculate strict fixed structural protection levels on entry
+longSL = valuewhen(strategy.position_size[1] == 0 and strategy.position_size > 0, close - (atr * atrMultiplier), 0)
+longTP = valuewhen(strategy.position_size[1] == 0 and strategy.position_size > 0, close + ((close - (close - (atr * atrMultiplier))) * riskReward), 0)
+
+shortSL = valuewhen(strategy.position_size[1] == 0 and strategy.position_size < 0, close + (atr * atrMultiplier), 0)
+shortTP = valuewhen(strategy.position_size[1] == 0 and strategy.position_size < 0, close - (((close + (atr * atrMultiplier)) - close) * riskReward), 0)
+
+// Protected Break-Even Logic (Moves SL to entry plus a tiny profit cushion after hitting 1.2 R:R)
+longBETrigger  = valuewhen(strategy.position_size[1] == 0 and strategy.position_size > 0, close + (atr * 1.1), 0)
+shortBETrigger = valuewhen(strategy.position_size[1] == 0 and strategy.position_size < 0, close - (atr * 1.1), 0)
+
+// Pure Pine Script v3 compatible conditional assignment
+finalSL = strategy.position_size > 0 ? (high >= longBETrigger ? strategy.position_avg_price + (atr * 0.15) : longSL) : strategy.position_size < 0 ? (low <= shortBETrigger ? strategy.position_avg_price - (atr * 0.15) : shortSL) : na
+
+// Exit Guardrails
+strategy.exit("Exit Buy", "Buy", stop=finalSL, limit=longTP, when=strategy.position_size > 0)
+strategy.exit("Exit Sell", "Sell", stop=finalSL, limit=shortTP, when=strategy.position_size < 0)
+
+// --- VISUALIZATION ---
+plot(strategy.position_size > 0 ? finalSL : na, color=#ff0000, style=linebr, linewidth=2, title="Active SL")
+plot(strategy.position_size > 0 ? longTP : na, color=#00ff00, style=linebr, linewidth=2, title="Active TP")
+plot(strategy.position_size < 0 ? finalSL : na, color=#ff0000, style=linebr, linewidth=2, title="Active SL")
+plot(strategy.position_size < 0 ? shortTP : na, color=#00ff00, style=linebr, linewidth=2, title="Active TP")
