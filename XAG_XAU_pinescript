@@ -1,0 +1,100 @@
+//@version=5
+strategy("XAU Hyper-Growth Engine - Elite Ed. (Optimized v5)", overlay=true, initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=25)
+
+// --- INPUTS ---
+trendLength   = input.int(45, minval=1, title="Trend Filter Length (HMA)")
+atrLength     = input.int(14, minval=1, title="ATR Length")
+atrMultiplier = input.float(3.0, minval=0.1, title="Stop Loss ATR Multiplier")
+riskReward    = input.float(2.3, minval=0.1, title="Risk to Reward Ratio (R:R)")
+
+// Session Filter
+useTimeFilter = input.bool(true, title="Trade Only During Liquid Sessions?")
+tradeSession  = input.string("0700-1700:23456", title="Allowed Session Time (London/NY UTC)")
+
+// Channel Breakout Lookback
+breakoutLength = input.int(9, minval=1, title="Breakout Lookback Channel")
+
+// --- INDICATORS & FILTERS ---
+trendLine = ta.hma(close, trendLength)
+atr       = ta.atr(atrLength)
+
+// Volatility Expansion Filter
+atrMaFilter = atr > ta.sma(atr, 20)
+
+// Session Time Check 
+inSession = not useTimeFilter or not na(time(timeframe.period, tradeSession))
+
+// Fast Channel Bands
+highestHigh = ta.highest(high, breakoutLength)
+lowestLow   = ta.lowest(low, breakoutLength)
+
+// Plotting Trend Filter
+trendColor = close > trendLine ? color.green : color.red
+plot(trendLine, color=trendColor, linewidth=2, title="Dynamic Trend Filter")
+
+// --- LOGIC ---
+trendBullish = close > trendLine
+trendBearish = close < trendLine
+
+// Signals trigger on breakout ONLY if volatility is expanding
+buySignal  = (close >= highestHigh[1]) and trendBullish and inSession and atrMaFilter
+sellSignal = (close <= lowestLow[1]) and trendBearish and inSession and atrMaFilter
+
+// --- POSITION TRACKING & RISK MANAGEMENT ---
+var float entrySL = na
+var float entryTP = na
+var float beTrigger = na
+var bool  beActivated = false
+
+positionChanged = ta.change(strategy.position_size) != 0
+isLong  = strategy.position_size > 0
+isShort = strategy.position_size < 0
+
+if buySignal and strategy.position_size == 0
+    strategy.entry("Buy", strategy.long)
+
+if sellSignal and strategy.position_size == 0
+    strategy.entry("Sell", strategy.short)
+
+// Capture levels STRICTLY on the bar the position opens
+if positionChanged and isLong
+    entrySL     := close - (atr * atrMultiplier)
+    entryTP     := close + ((close - (close - (atr * atrMultiplier))) * riskReward)
+    beTrigger   := close + (atr * 1.1)
+    beActivated := false
+
+if positionChanged and isShort
+    entrySL     := close + (atr * atrMultiplier)
+    entryTP     := close - (((close + (atr * atrMultiplier)) - close) * riskReward)
+    beTrigger   := close - (atr * 1.1)
+    beActivated := false
+
+// Check if Break-Even trigger condition was met during the trade
+if isLong and high >= beTrigger
+    beActivated := true
+if isShort and low <= beTrigger
+    beActivated := true
+
+// Reset variables when flat
+if strategy.position_size == 0
+    entrySL     := na
+    entryTP     := na
+    beTrigger   := na
+    beActivated := false
+
+// Calculate final structural protection levels
+float finalSL = na
+if isLong
+    finalSL := beActivated ? (strategy.position_avg_price + (atr * 0.15)) : entrySL
+if isShort
+    finalSL := beActivated ? (strategy.position_avg_price - (atr * 0.15)) : entrySL
+
+// --- EXITS ---
+strategy.exit("Exit Buy", "Buy", stop=finalSL, limit=entryTP, when=isLong)
+strategy.exit("Exit Sell", "Sell", stop=finalSL, limit=entryTP, when=isShort)
+
+// --- VISUALIZATION ---
+plot(isLong ? finalSL : na, color=color.red, style=plot.style_linebr, linewidth=2, title="Active SL")
+plot(isLong ? entryTP : na, color=color.green, style=plot.style_linebr, linewidth=2, title="Active TP")
+plot(isShort ? finalSL : na, color=color.red, style=plot.style_linebr, linewidth=2, title="Active SL")
+plot(isShort ? entryTP : na, color=color.green, style=plot.style_linebr, linewidth=2, title="Active TP")
